@@ -1,0 +1,76 @@
+<!DOCTYPE html>
+<html lang="en"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="apple-mobile-web-app-capable" content="yes"><meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="apple-mobile-web-app-title" content="G-force"><meta name="theme-color" content="#ff8a4c">
+<link rel="manifest" href="manifest.json"><link rel="apple-touch-icon" href="icon-180.png">
+<title>G-force</title>
+<style>
+:root{--bg:#ff8a4c;--ink:#1a1a1a;--soft:rgba(26,26,26,.6);--panel:rgba(26,26,26,.09)}
+*{box-sizing:border-box;margin:0}
+html,body{height:100%;background:var(--bg);color:var(--ink);font-family:-apple-system,"SF Pro Display","Helvetica Neue",Arial,sans-serif;-webkit-user-select:none;user-select:none;overscroll-behavior:none}
+body{display:flex;flex-direction:column;gap:14px;overflow-y:auto;padding:calc(env(safe-area-inset-top,0px) + 16px) 20px calc(env(safe-area-inset-bottom,0px) + 16px)}
+button{border:0;border-radius:14px;background:var(--ink);color:var(--bg);font-family:inherit;font-size:1.15rem;font-weight:700;padding:16px;width:100%}
+button:active{opacity:.8}
+button:focus-visible{outline:3px solid var(--ink);outline-offset:3px}
+.mini{width:auto;padding:8px 12px;font-size:.9rem;background:var(--panel);color:var(--ink);border-radius:10px}
+.st{color:var(--soft);font-size:.95rem;min-height:1.4em}
+.row{display:flex;justify-content:space-between;gap:10px;font-size:.9rem;color:var(--soft);font-variant-numeric:tabular-nums}
+.row b{display:block;font-size:1.45rem;color:var(--ink);font-weight:700}
+
+#gsvg{width:min(100%,320px);align-self:center;flex:none}
+.gnum{text-align:center;font-size:4rem;font-weight:800;font-variant-numeric:tabular-nums;letter-spacing:-.03em;line-height:1}
+
+</style></head><body>
+
+<div class="st" id="st">Lay the phone flat, top pointing forward, then tap Start.</div>
+<svg id="gsvg" viewBox="-120 -120 240 240">
+  <circle r="100" fill="rgba(26,26,26,.09)" stroke="#1a1a1a" stroke-width="3"/>
+  <circle r="50" fill="none" stroke="#1a1a1a" stroke-width="1.5" stroke-dasharray="4 4"/>
+  <line x1="-100" x2="100" stroke="#1a1a1a" stroke-width="1.5"/><line y1="-100" y2="100" stroke="#1a1a1a" stroke-width="1.5"/>
+  <circle id="gdot" r="10" fill="#1a1a1a"/>
+</svg>
+<div class="gnum"><span id="gmag">0.00</span> g</div>
+<div class="row"><div><b id="gx">0.00</b>side g</div><div><b id="gy">0.00</b>fwd/back g</div><div><b id="gpk">0.00</b>peak g</div></div>
+<button id="gbtn">Start</button>
+<button class="mini" id="gpkreset" style="width:100%">Reset peak</button>
+<div class="st">The dot moves toward the direction the phone accelerates. Rings mark 0.5 g and 1 g.</div>
+<script>
+(() => {
+const $ = id => document.getElementById(id), fmt = v => v.toFixed(2), rad = d => d * Math.PI / 180, p2 = n => String(n).padStart(2, '0');
+let wake = null, want = false;
+async function acquire() { if (!want || wake) return; try { wake = await navigator.wakeLock.request('screen'); wake.onrelease = () => { wake = null; }; } catch (e) {} }
+function keepAwake(on) { want = on; if (on) acquire(); else if (wake) { wake.release().catch(() => {}); wake = null; } }
+document.addEventListener('visibilitychange', () => { if (document.visibilityState === 'visible') acquire(); });
+const hav = (a, b) => { const R = 6371000, dl = rad(b.la - a.la), dn = rad(b.lo - a.lo), h = Math.sin(dl/2)**2 + Math.cos(rad(a.la))*Math.cos(rad(b.la))*Math.sin(dn/2)**2; return 2*R*Math.asin(Math.sqrt(h)); };
+const GPSERR = { 1: 'Location is blocked. Allow it in Settings > Privacy > Location Services > Safari Websites.', 2: 'No GPS signal. Move to an open area.', 3: 'GPS is taking too long. Keep waiting.' };
+const store = { get(k, d) { try { return JSON.parse(localStorage.getItem(k)) ?? d; } catch (e) { return d; } }, set(k, v) { try { localStorage.setItem(k, JSON.stringify(v)); } catch (e) {} } };
+
+const st = m => $('st').textContent = m;
+let gOn = false, gx = 0, gy = 0, gm = 0, gpk = 0, grav = [0, 0, 0];
+async function gStart() {
+  if (typeof DeviceMotionEvent !== 'undefined' && DeviceMotionEvent.requestPermission) {
+    try { if (await DeviceMotionEvent.requestPermission() !== 'granted') { st('Motion access denied. Reopen the app and allow it.'); return; } }
+    catch (e) { st('Could not ask for motion access.'); return; }
+  }
+  addEventListener('devicemotion', onMotion); gOn = true; keepAwake(true); $('gbtn').textContent = 'Stop'; st('Measuring.');
+}
+function gStop() { removeEventListener('devicemotion', onMotion); gOn = false; keepAwake(false); $('gbtn').textContent = 'Start'; st('Stopped.'); }
+function onMotion(e) {
+  let a = e.acceleration, x, y, z;
+  if (a && a.x != null) { x = a.x; y = a.y; z = a.z; }
+  else { const q = e.accelerationIncludingGravity; if (!q) return; const v = [q.x, q.y, q.z];
+    grav = grav.map((c, i) => c * .9 + v[i] * .1); x = v[0] - grav[0]; y = v[1] - grav[1]; z = v[2] - grav[2]; }
+  x /= 9.81; y /= 9.81; z /= 9.81;
+  gx += (x - gx) * .3; gy += (y - gy) * .3; gm += (Math.hypot(x, y, z) - gm) * .3;
+  if (gm > gpk) gpk = gm;
+  const r = Math.hypot(gx, gy), s = Math.min(r, 1.15) / (r || 1) * 100;
+  $('gdot').setAttribute('cx', gx * s); $('gdot').setAttribute('cy', -gy * s);
+  $('gmag').textContent = fmt(gm); $('gx').textContent = fmt(gx); $('gy').textContent = fmt(gy); $('gpk').textContent = fmt(gpk);
+}
+$('gbtn').onclick = () => gOn ? gStop() : gStart();
+$('gpkreset').onclick = () => { gpk = 0; $('gpk').textContent = fmt(0); };
+
+})();
+</script></body></html>
